@@ -1,0 +1,81 @@
+# Build directories
+build/
+Build/
+*.build/
+
+# Compiled binaries
+*.exe
+*.out
+*.app
+*.dll
+*.so
+*.dylib
+autofib_ibkr
+
+# Object files
+*.o
+*.obj
+*.lo
+*.slo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ibkr_env/
+*.egg-info/
+dist/
+*.egg
+
+# MQL5 compiled files
+*.ex5
+*.ex4
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# Results and logs
+*.json
+*.log
+*.csv
+
+# IBKR API (too large for git)
+IBJts/
+
+# Wine
+.wine/
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# Archives
+*.zip
+*.tar.gz
+*.tgz
+
+# Documentation builds
+docs/_build/
+
+# System files
+Thumbs.db
+ehthumbs.db
