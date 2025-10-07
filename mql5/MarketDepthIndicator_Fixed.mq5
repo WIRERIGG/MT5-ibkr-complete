@@ -138,16 +138,13 @@ int OnInit() {
    ArraySetAsSeries(AskDepthBuffer, true);
    ArraySetAsSeries(ImbalanceBuffer, true);
 
-   // Subscribe to market depth (optional - will use synthetic data if unavailable)
-   Print("Subscribing to market depth for ", _Symbol, "...");
-   if(!MarketBookAdd(_Symbol)) {
-      Print("WARNING: Market depth not available for ", _Symbol);
-      Print("Will use SYNTHETIC depth calculation based on volume");
-      market_depth_available = false;
-   } else {
-      market_depth_available = true;
-      Print("SUCCESS: Subscribed to real market depth for ", _Symbol);
-   }
+   // FORCE SYNTHETIC MODE for reliability
+   // Even if MarketBookAdd succeeds, OnBookEvent may never fire
+   Print("Using SYNTHETIC mode (calculated from volume/price)");
+   market_depth_available = false;
+
+   // Try to subscribe anyway (won't hurt)
+   MarketBookAdd(_Symbol);
 
    // Create ATR handle
    atr_handle = iATR(_Symbol, PERIOD_CURRENT, ATRPeriod);
@@ -188,17 +185,15 @@ int OnInit() {
 
    Print("========================================");
    Print("Market Depth Indicator SUCCESSFULLY initialized for ", _Symbol);
-   if(market_depth_available) {
-      Print("Mode: REAL market depth (Level II data)");
-      Print("Waiting for OnBookEvent() updates...");
-   } else {
-      Print("Mode: SYNTHETIC depth (calculated from volume)");
-      Print("Will update on every bar via OnCalculate()");
-   }
+   Print("Mode: SYNTHETIC (calculated from volume/price)");
+   Print("Updates every bar via OnCalculate()");
+   Print("");
    Print("You should see 3 colored lines on the chart:");
-   Print("- BLUE: Bid depth");
-   Print("- RED: Ask depth");
-   Print("- YELLOW: Volume imbalance %");
+   Print("- BLUE line: Below price (seller pressure)");
+   Print("- YELLOW line: At price (reference)");
+   Print("- RED line: Above price (buyer pressure)");
+   Print("");
+   Print("Rich analytics in Comment() box (upper-left)");
    Print("========================================");
    return(INIT_SUCCEEDED);
 }
