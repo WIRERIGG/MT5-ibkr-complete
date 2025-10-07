@@ -120,15 +120,16 @@ int OnCalculate(const int rates_total,
       double bid_ratio = bullish ? (0.5 + body_strength * 0.3) : (0.5 - body_strength * 0.3);
       double ask_ratio = 1.0 - bid_ratio;
 
-      // Calculate buffer values
-      BidDepthBuffer[i] = current_volume * bid_ratio;
-      AskDepthBuffer[i] = current_volume * ask_ratio;
+      // Calculate volume distribution
+      double bid_volume = current_volume * bid_ratio;
+      double ask_volume = current_volume * ask_ratio;
 
-      // Imbalance percentage (ask/bid * 100)
-      if(BidDepthBuffer[i] > 0)
-         ImbalanceBuffer[i] = (AskDepthBuffer[i] / BidDepthBuffer[i]) * 100.0;
-      else
-         ImbalanceBuffer[i] = 100.0;
+      // SCALE TO PRICE CHART - plot around current price
+      // Use volume as offset from close price (in pips)
+      double pip_value = _Point * 10;
+      BidDepthBuffer[i] = close[i] - (ask_volume * pip_value * 0.1);  // Below price (sellers push down)
+      AskDepthBuffer[i] = close[i] + (bid_volume * pip_value * 0.1);  // Above price (buyers push up)
+      ImbalanceBuffer[i] = close[i];  // At price level (reference line)
    }
 
    // Display current values
@@ -137,17 +138,17 @@ int OnCalculate(const int rates_total,
    StringAdd(info, StringFormat("Time: %s\n", TimeToString(TimeCurrent())));
    StringAdd(info, StringFormat("Close: %.5f\n", close[0]));
    StringAdd(info, StringFormat("Volume: %.0f\n", (double)tick_volume[0]));
-   StringAdd(info, StringFormat("\nBid Depth: %.0f (Blue)\n", BidDepthBuffer[0]));
-   StringAdd(info, StringFormat("Ask Depth: %.0f (Red)\n", AskDepthBuffer[0]));
-   StringAdd(info, StringFormat("Imbalance: %.1f%% (Yellow)\n", ImbalanceBuffer[0]));
+   StringAdd(info, StringFormat("\nRed Line (Ask): %.5f\n", AskDepthBuffer[0]));
+   StringAdd(info, StringFormat("Yellow Line (Mid): %.5f\n", ImbalanceBuffer[0]));
+   StringAdd(info, StringFormat("Blue Line (Bid): %.5f\n", BidDepthBuffer[0]));
 
    string trend = (close[0] > open[0]) ? "Bullish" : "Bearish";
-   StringAdd(info, StringFormat("\nCurrent Bar: %s\n", trend));
-   StringAdd(info, "Mode: Calculated from volume");
+   StringAdd(info, StringFormat("\nBar: %s\n", trend));
+   StringAdd(info, "Lines show price pressure from volume");
    Comment(info);
 
    if(calc_count <= 3) {
-      Print("Buffer values - Bid: ", BidDepthBuffer[0], ", Ask: ", AskDepthBuffer[0], ", Imbalance: ", ImbalanceBuffer[0]);
+      Print("Lines visible - Ask: ", AskDepthBuffer[0], ", Mid: ", ImbalanceBuffer[0], ", Bid: ", BidDepthBuffer[0]);
    }
 
    return(rates_total);
