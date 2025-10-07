@@ -730,39 +730,92 @@ int OnCalculate(const int rates_total,
       if(prev_calculated > 1)
          start = prev_calculated - 1;
 
+      // Calculate analytics on current bar only
+      double current_volume = (double)tick_volume[0];
+      bool bullish = close[0] > open[0];
+      double range = high[0] - low[0];
+      double body_percent = (range > 0) ? MathAbs(close[0] - open[0]) / range : 0.5;
+
+      // Volume distribution
+      double bid_ratio = bullish ? (0.5 + body_percent * 0.3) : (0.5 - body_percent * 0.3);
+      double ask_ratio = 1.0 - bid_ratio;
+      double bid_volume = current_volume * bid_ratio;
+      double ask_volume = current_volume * ask_ratio;
+
+      // Calculate imbalance metrics
+      double volume_imbalance = (bid_volume > 0) ? (ask_volume / bid_volume) * 100.0 : 100.0;
+      string imbalance_signal = (volume_imbalance > 150.0) ? "STRONG SELL" :
+                                (volume_imbalance < 66.7) ? "STRONG BUY" : "BALANCED";
+
+      // Calculate velocity (change in volume)
+      static double prev_total_volume = 0;
+      double total_volume = bid_volume + ask_volume;
+      double velocity = total_volume - prev_total_volume;
+      prev_total_volume = total_volume;
+
+      // Pressure score (-100 to +100, positive = bullish)
+      double pressure_score = (bid_volume - ask_volume) / (bid_volume + ask_volume + 0.00001) * 100.0;
+
+      // ML-style prediction based on multiple factors
+      double ml_score = 0;
+      ml_score += (body_percent > 0.7) ? (bullish ? 30 : -30) : 0;  // Strong body
+      ml_score += pressure_score * 0.3;  // Volume pressure
+      ml_score += (velocity > 0) ? 20 : -10;  // Volume acceleration
+
+      string ml_prediction = (ml_score > 20) ? "UP (High Confidence)" :
+                            (ml_score > 0) ? "UP (Low Confidence)" :
+                            (ml_score > -20) ? "DOWN (Low Confidence)" :
+                            "DOWN (High Confidence)";
+
+      // Plot buffers as PRICE-SCALED values for visibility
+      double pip_value = _Point * 10;
+      double scale_factor = 0.01;  // Much smaller scaling for visibility
+
       for(int i = start; i < rates_total; i++) {
-         // Calculate synthetic bid/ask depth based on volume and price action
-         double current_volume = (double)tick_volume[i];
-         double current_spread = spread[i] * _Point;
+         double vol = (double)tick_volume[i];
+         bool bull = close[i] > open[i];
+         double r = high[i] - low[i];
+         double bp = (r > 0) ? MathAbs(close[i] - open[i]) / r : 0.5;
 
-         // Bullish bar: more bid depth
-         bool bullish = close[i] > open[i];
-         double body_percent = MathAbs(close[i] - open[i]) / (high[i] - low[i] + 0.00001);
+         double br = bull ? (0.5 + bp * 0.3) : (0.5 - bp * 0.3);
+         double ar = 1.0 - br;
 
-         // Estimate bid/ask distribution
-         double bid_ratio = bullish ? (0.5 + body_percent * 0.3) : (0.5 - body_percent * 0.3);
-         double ask_ratio = 1.0 - bid_ratio;
+         double bv = vol * br;
+         double av = vol * ar;
 
-         BidDepthBuffer[i] = current_volume * bid_ratio;
-         AskDepthBuffer[i] = current_volume * ask_ratio;
-
-         // Imbalance percentage
-         if(BidDepthBuffer[i] > 0)
-            ImbalanceBuffer[i] = (AskDepthBuffer[i] / BidDepthBuffer[i]) * 100.0;
-         else
-            ImbalanceBuffer[i] = 100.0;
+         // PLOT AS PRICE OFFSETS (visible on chart)
+         BidDepthBuffer[i] = close[i] - (av * pip_value * scale_factor);
+         AskDepthBuffer[i] = close[i] + (bv * pip_value * scale_factor);
+         ImbalanceBuffer[i] = close[i];  // Reference line at price
       }
 
-      // Update comment with current values
-      string info = "=== Market Depth (SYNTHETIC) ===\n";
-      StringAdd(info, StringFormat("Symbol: %s\n", _Symbol));
-      StringAdd(info, StringFormat("Time: %s\n", TimeToString(TimeCurrent())));
-      StringAdd(info, StringFormat("Close: %.5f\n", close[0]));
-      StringAdd(info, StringFormat("\nBid Depth: %.0f\n", BidDepthBuffer[0]));
-      StringAdd(info, StringFormat("Ask Depth: %.0f\n", AskDepthBuffer[0]));
-      StringAdd(info, StringFormat("Imbalance: %.1f%%\n", ImbalanceBuffer[0]));
-      StringAdd(info, "\nMode: Calculated from volume\n");
-      StringAdd(info, "Not real Level II data");
+      // Rich labeled data display
+      string info = "=== MARKET DEPTH ANALYTICS (SYNTHETIC) ===\n";
+      StringAdd(info, StringFormat("Symbol: %s | Time: %s\n", _Symbol, TimeToString(TimeCurrent())));
+      StringAdd(info, StringFormat("Close: %.5f | Volume: %.0f\n\n", close[0], current_volume));
+
+      StringAdd(info, "--- VOLUME DISTRIBUTION ---\n");
+      StringAdd(info, StringFormat("Bid Volume: %.0f (%.1f%%)\n", bid_volume, bid_ratio * 100));
+      StringAdd(info, StringFormat("Ask Volume: %.0f (%.1f%%)\n", ask_volume, ask_ratio * 100));
+      StringAdd(info, StringFormat("Imbalance: %.1f%% (%s)\n\n", volume_imbalance, imbalance_signal));
+
+      StringAdd(info, "--- FLOW METRICS ---\n");
+      StringAdd(info, StringFormat("Velocity: %.0f (volume change)\n", velocity));
+      StringAdd(info, StringFormat("Pressure Score: %.1f (-100=Bear, +100=Bull)\n", pressure_score));
+      StringAdd(info, StringFormat("Body Strength: %.1f%%\n\n", body_percent * 100));
+
+      StringAdd(info, "--- PREDICTIONS ---\n");
+      StringAdd(info, StringFormat("ML Score: %.1f\n", ml_score));
+      StringAdd(info, StringFormat("Direction: %s\n\n", ml_prediction));
+
+      StringAdd(info, "--- CHART LINES ---\n");
+      StringAdd(info, StringFormat("Blue (Bid): %.5f\n", BidDepthBuffer[0]));
+      StringAdd(info, StringFormat("Yellow (Mid): %.5f\n", ImbalanceBuffer[0]));
+      StringAdd(info, StringFormat("Red (Ask): %.5f\n\n", AskDepthBuffer[0]));
+
+      StringAdd(info, "Mode: SYNTHETIC (from volume/price)\n");
+      StringAdd(info, "Spread = Volume intensity");
+
       Comment(info);
    }
 
