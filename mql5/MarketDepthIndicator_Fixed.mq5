@@ -138,17 +138,16 @@ int OnInit() {
    ArraySetAsSeries(AskDepthBuffer, true);
    ArraySetAsSeries(ImbalanceBuffer, true);
 
-   // Subscribe to market depth
+   // Subscribe to market depth (optional - will use synthetic data if unavailable)
    Print("Subscribing to market depth for ", _Symbol, "...");
    if(!MarketBookAdd(_Symbol)) {
-      Print("ERROR: Failed to subscribe to market depth for ", _Symbol);
-      Print("Market depth may not be available for this symbol");
-      Print("This indicator requires Level II / Market Depth data");
+      Print("WARNING: Market depth not available for ", _Symbol);
+      Print("Will use SYNTHETIC depth calculation based on volume");
       market_depth_available = false;
-      return(INIT_FAILED);
+   } else {
+      market_depth_available = true;
+      Print("SUCCESS: Subscribed to real market depth for ", _Symbol);
    }
-   market_depth_available = true;
-   Print("SUCCESS: Subscribed to market depth for ", _Symbol);
 
    // Create ATR handle
    atr_handle = iATR(_Symbol, PERIOD_CURRENT, ATRPeriod);
@@ -189,11 +188,17 @@ int OnInit() {
 
    Print("========================================");
    Print("Market Depth Indicator SUCCESSFULLY initialized for ", _Symbol);
-   Print("Waiting for market depth events...");
-   Print("If nothing appears, check:");
-   Print("1. Symbol has market depth data (Level II)");
-   Print("2. Check 'View > Market Depth' in MT5");
-   Print("3. Check Experts log for OnBookEvent messages");
+   if(market_depth_available) {
+      Print("Mode: REAL market depth (Level II data)");
+      Print("Waiting for OnBookEvent() updates...");
+   } else {
+      Print("Mode: SYNTHETIC depth (calculated from volume)");
+      Print("Will update on every bar via OnCalculate()");
+   }
+   Print("You should see 3 colored lines on the chart:");
+   Print("- BLUE: Bid depth");
+   Print("- RED: Ask depth");
+   Print("- YELLOW: Volume imbalance %");
    Print("========================================");
    return(INIT_SUCCEEDED);
 }
@@ -202,8 +207,10 @@ int OnInit() {
 //| Custom indicator deinitialization function                        |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason) {
-   if(market_depth_available)
+   if(market_depth_available) {
       MarketBookRelease(_Symbol);
+      Print("Released real market depth subscription");
+   }
    Comment("");
    if(ShowHistogram)
       canvas.Destroy();
@@ -355,18 +362,18 @@ string DetectClusters(MqlBookInfo &orders[], double window, double threshold) {
 }
 
 //+------------------------------------------------------------------+
-//| Market book event handler                                        |
+//| Market book event handler (ONLY for REAL market depth)           |
 //+------------------------------------------------------------------+
 void OnBookEvent(const string &symbol) {
    static int event_count = 0;
    event_count++;
 
    if(event_count <= 5)
-      Print("OnBookEvent called #", event_count, " for symbol: ", symbol);
+      Print("OnBookEvent called #", event_count, " for symbol: ", symbol, " (REAL market depth)");
 
    if(symbol != _Symbol || !market_depth_available) {
       if(event_count <= 5)
-         Print("Ignoring event (wrong symbol or depth unavailable)");
+         Print("Ignoring event (wrong symbol or using synthetic mode)");
       return;
    }
 
@@ -702,24 +709,61 @@ int OnCalculate(const int rates_total,
 
    if(first_call) {
       Print("OnCalculate called - rates_total: ", rates_total);
-      Print("Indicator buffers are ready for market depth updates");
+      if(market_depth_available)
+         Print("Indicator buffers ready for REAL market depth updates");
+      else
+         Print("Calculating SYNTHETIC depth from volume/price action");
       first_call = false;
    }
 
-   // Initialize new bars with previous values
-   if(prev_calculated == 0) {
-      ArrayInitialize(BidDepthBuffer, 0);
-      ArrayInitialize(AskDepthBuffer, 0);
-      ArrayInitialize(ImbalanceBuffer, 0);
-   } else {
-      // Copy forward last known values to new bars
-      for(int i = prev_calculated; i < rates_total; i++) {
-         if(prev_calculated > 0) {
-            BidDepthBuffer[i] = BidDepthBuffer[prev_calculated - 1];
-            AskDepthBuffer[i] = AskDepthBuffer[prev_calculated - 1];
-            ImbalanceBuffer[i] = ImbalanceBuffer[prev_calculated - 1];
-         }
+   ArraySetAsSeries(close, true);
+   ArraySetAsSeries(open, true);
+   ArraySetAsSeries(high, true);
+   ArraySetAsSeries(low, true);
+   ArraySetAsSeries(tick_volume, true);
+   ArraySetAsSeries(spread, true);
+
+   // If market depth is available, OnBookEvent will update buffers
+   // If not available, calculate synthetic values here
+   if(!market_depth_available) {
+      int start = 0;
+      if(prev_calculated > 1)
+         start = prev_calculated - 1;
+
+      for(int i = start; i < rates_total; i++) {
+         // Calculate synthetic bid/ask depth based on volume and price action
+         double current_volume = (double)tick_volume[i];
+         double current_spread = spread[i] * _Point;
+
+         // Bullish bar: more bid depth
+         bool bullish = close[i] > open[i];
+         double body_percent = MathAbs(close[i] - open[i]) / (high[i] - low[i] + 0.00001);
+
+         // Estimate bid/ask distribution
+         double bid_ratio = bullish ? (0.5 + body_percent * 0.3) : (0.5 - body_percent * 0.3);
+         double ask_ratio = 1.0 - bid_ratio;
+
+         BidDepthBuffer[i] = current_volume * bid_ratio;
+         AskDepthBuffer[i] = current_volume * ask_ratio;
+
+         // Imbalance percentage
+         if(BidDepthBuffer[i] > 0)
+            ImbalanceBuffer[i] = (AskDepthBuffer[i] / BidDepthBuffer[i]) * 100.0;
+         else
+            ImbalanceBuffer[i] = 100.0;
       }
+
+      // Update comment with current values
+      string info = "=== Market Depth (SYNTHETIC) ===\n";
+      StringAdd(info, StringFormat("Symbol: %s\n", _Symbol));
+      StringAdd(info, StringFormat("Time: %s\n", TimeToString(TimeCurrent())));
+      StringAdd(info, StringFormat("Close: %.5f\n", close[0]));
+      StringAdd(info, StringFormat("\nBid Depth: %.0f\n", BidDepthBuffer[0]));
+      StringAdd(info, StringFormat("Ask Depth: %.0f\n", AskDepthBuffer[0]));
+      StringAdd(info, StringFormat("Imbalance: %.1f%%\n", ImbalanceBuffer[0]));
+      StringAdd(info, "\nMode: Calculated from volume\n");
+      StringAdd(info, "Not real Level II data");
+      Comment(info);
    }
 
    return(rates_total);
