@@ -7,8 +7,24 @@
 #property link      "https://github.com/WIRERIGG"
 #property version   "2.00"
 #property indicator_chart_window
-#property indicator_buffers 0
-#property indicator_plots   0
+#property indicator_buffers 3
+#property indicator_plots   3
+
+// Plot bid/ask depth as lines
+#property indicator_label1  "Bid Depth"
+#property indicator_type1   DRAW_LINE
+#property indicator_color1  clrBlue
+#property indicator_width1  2
+
+#property indicator_label2  "Ask Depth"
+#property indicator_type2   DRAW_LINE
+#property indicator_color2  clrRed
+#property indicator_width2  2
+
+#property indicator_label3  "Imbalance"
+#property indicator_type3   DRAW_LINE
+#property indicator_color3  clrYellow
+#property indicator_width3  1
 
 #include <Canvas\Canvas.mqh>
 
@@ -57,6 +73,11 @@ input double MLVelocityWeight      = 0.1;         // Weight for velocity
 input double MLDepthWeight         = 0.2;         // Weight for depth ratio
 input double MLNeutralThreshold    = 0.1;         // Neutral threshold
 
+//--- Indicator buffers
+double BidDepthBuffer[];
+double AskDepthBuffer[];
+double ImbalanceBuffer[];
+
 //--- Global variables
 CCanvas canvas;
 string  log_file_name;
@@ -104,14 +125,30 @@ int OnInit() {
       return(INIT_FAILED);
    }
 
+   // Set indicator buffers
+   SetIndexBuffer(0, BidDepthBuffer, INDICATOR_DATA);
+   SetIndexBuffer(1, AskDepthBuffer, INDICATOR_DATA);
+   SetIndexBuffer(2, ImbalanceBuffer, INDICATOR_DATA);
+
+   PlotIndexSetDouble(0, PLOT_EMPTY_VALUE, 0.0);
+   PlotIndexSetDouble(1, PLOT_EMPTY_VALUE, 0.0);
+   PlotIndexSetDouble(2, PLOT_EMPTY_VALUE, 0.0);
+
+   ArraySetAsSeries(BidDepthBuffer, true);
+   ArraySetAsSeries(AskDepthBuffer, true);
+   ArraySetAsSeries(ImbalanceBuffer, true);
+
    // Subscribe to market depth
+   Print("Subscribing to market depth for ", _Symbol, "...");
    if(!MarketBookAdd(_Symbol)) {
-      Print("Failed to subscribe to market depth for ", _Symbol);
+      Print("ERROR: Failed to subscribe to market depth for ", _Symbol);
       Print("Market depth may not be available for this symbol");
+      Print("This indicator requires Level II / Market Depth data");
       market_depth_available = false;
       return(INIT_FAILED);
    }
    market_depth_available = true;
+   Print("SUCCESS: Subscribed to market depth for ", _Symbol);
 
    // Create ATR handle
    atr_handle = iATR(_Symbol, PERIOD_CURRENT, ATRPeriod);
@@ -150,7 +187,14 @@ int OnInit() {
    ArrayResize(prev_sell_volumes, MaxDepthLevels);
    ArrayInitialize(prev_sell_volumes, 0);
 
-   Print("Market Depth Indicator initialized for ", _Symbol);
+   Print("========================================");
+   Print("Market Depth Indicator SUCCESSFULLY initialized for ", _Symbol);
+   Print("Waiting for market depth events...");
+   Print("If nothing appears, check:");
+   Print("1. Symbol has market depth data (Level II)");
+   Print("2. Check 'View > Market Depth' in MT5");
+   Print("3. Check Experts log for OnBookEvent messages");
+   Print("========================================");
    return(INIT_SUCCEEDED);
 }
 
@@ -314,13 +358,25 @@ string DetectClusters(MqlBookInfo &orders[], double window, double threshold) {
 //| Market book event handler                                        |
 //+------------------------------------------------------------------+
 void OnBookEvent(const string &symbol) {
-   if(symbol != _Symbol || !market_depth_available)
+   static int event_count = 0;
+   event_count++;
+
+   if(event_count <= 5)
+      Print("OnBookEvent called #", event_count, " for symbol: ", symbol);
+
+   if(symbol != _Symbol || !market_depth_available) {
+      if(event_count <= 5)
+         Print("Ignoring event (wrong symbol or depth unavailable)");
       return;
+   }
 
    // Control update frequency
    ulong current_ms = GetTickCount();
    if(current_ms - last_update_ms < (ulong)UpdateInterval)
       return;
+
+   if(event_count <= 5)
+      Print("Processing market depth update...");
 
    MqlBookInfo book[];
    if(!GetMarketBookWithRetry(book)) {
@@ -332,6 +388,9 @@ void OnBookEvent(const string &symbol) {
       Print("Empty order book");
       return;
    }
+
+   if(event_count <= 5)
+      Print("Order book size: ", ArraySize(book), " orders");
 
    // Rotate log file if date changed
    if(LogToFile && depth_file_handle != INVALID_HANDLE) {
@@ -562,6 +621,15 @@ void OnBookEvent(const string &symbol) {
    if(StringLen(iceberg_text) > 0)
       StringAdd(output, iceberg_text);
 
+   // Update indicator buffers (current bar)
+   BidDepthBuffer[0] = bid_depth;
+   AskDepthBuffer[0] = ask_depth;
+   ImbalanceBuffer[0] = imbalance_percent;
+
+   if(event_count <= 5) {
+      Print("Updated buffers: BidDepth=", bid_depth, " AskDepth=", ask_depth, " Imbalance=", imbalance_percent);
+   }
+
    // Display on chart
    if(ShowOnChart)
       Comment(output);
@@ -630,6 +698,30 @@ int OnCalculate(const int rates_total,
                 const long &tick_volume[],
                 const long &volume[],
                 const int &spread[]) {
+   static bool first_call = true;
+
+   if(first_call) {
+      Print("OnCalculate called - rates_total: ", rates_total);
+      Print("Indicator buffers are ready for market depth updates");
+      first_call = false;
+   }
+
+   // Initialize new bars with previous values
+   if(prev_calculated == 0) {
+      ArrayInitialize(BidDepthBuffer, 0);
+      ArrayInitialize(AskDepthBuffer, 0);
+      ArrayInitialize(ImbalanceBuffer, 0);
+   } else {
+      // Copy forward last known values to new bars
+      for(int i = prev_calculated; i < rates_total; i++) {
+         if(prev_calculated > 0) {
+            BidDepthBuffer[i] = BidDepthBuffer[prev_calculated - 1];
+            AskDepthBuffer[i] = AskDepthBuffer[prev_calculated - 1];
+            ImbalanceBuffer[i] = ImbalanceBuffer[prev_calculated - 1];
+         }
+      }
+   }
+
    return(rates_total);
 }
 //+------------------------------------------------------------------+
